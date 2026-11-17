@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Clinic Receptionist</title>
+<style>
+:root{--bg:#f6f7f9;--card:#fff;--ink:#1d2330;--muted:#6b7280;--accent:#2563eb;--me:#e0ebff;--line:#e5e7eb;--warn:#b45309}
+*{box-sizing:border-box}body{margin:0;font:15px/1.5 system-ui,sans-serif;background:var(--bg);color:var(--ink)}
+.wrap{max-width:960px;margin:0 auto;padding:24px 16px;display:grid;grid-template-columns:1fr 280px;gap:16px}
+@media(max-width:760px){.wrap{grid-template-columns:1fr}}
+h1{font-size:20px;margin:0 0 4px}.sub{color:var(--muted);font-size:13px;margin-bottom:16px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px}
+#log{height:52vh;overflow-y:auto;display:flex;flex-direction:column;gap:8px;padding-right:4px}
+.msg{max-width:80%;padding:8px 12px;border-radius:12px;white-space:pre-wrap}
+.me{align-self:flex-end;background:var(--me)}.bot{align-self:flex-start;background:#f1f2f4}
+.meta{font-size:11px;color:var(--muted);margin-top:2px}.handoff{color:var(--warn);font-weight:600}
+.row{display:flex;gap:8px;margin-top:12px}
+input{flex:1;padding:10px 12px;border:1px solid var(--line);border-radius:8px;font:inherit}
+button{padding:10px 14px;border:0;border-radius:8px;background:var(--accent);color:#fff;font:inherit;cursor:pointer}
+button.sec{background:#eef0f3;color:var(--ink)}button:disabled{opacity:.5;cursor:default}
+#mic.rec{background:#dc2626}
+.appt{border-top:1px solid var(--line);padding:8px 0;font-size:13px}.appt:first-child{border:0}
+h2{font-size:14px;margin:0 0 8px}
+</style></head><body>
+<div class="wrap">
+ <div>
+  <h1>Clinic Receptionist</h1>
+  <div class="sub" id="status">Connecting…</div>
+  <div class="card">
+   <div id="log"></div>
+   <div class="row">
+    <button id="mic" title="Hold to talk">🎤 Hold to talk</button>
+    <input id="text" placeholder="…or type a message" autocomplete="off">
+    <button id="send">Send</button>
+   </div>
+   <div class="row"><button class="sec" id="reset">New call</button></div>
+  </div>
+ </div>
+ <div class="card"><h2>Appointments</h2><div id="appts" class="sub">None yet</div></div>
+</div>
+<script>
+let sid=null, speech='text';
+const $=id=>document.getElementById(id), log=$('log');
+function add(cls,text,meta){const d=document.createElement('div');d.className='msg '+cls;d.textContent=text;
+ if(meta){const m=document.createElement('div');m.className='meta';m.innerHTML=meta;d.appendChild(m)}
+ log.appendChild(d);log.scrollTop=log.scrollHeight}
+async function start(){log.innerHTML='';const h=await (await fetch('/health')).json();speech=h.speech;
+ $('status').textContent=`LLM: ${h.llm} · Speech: ${h.speech}`+(h.speech==='text'?' (mic disabled; set SPEECH=elevenlabs)':'');
+ $('mic').disabled=h.speech==='text';
+ sid=(await (await fetch('/sessions',{method:'POST'})).json()).session_id;
+ add('bot','Hello, thanks for calling the clinic. How can I help?');refresh()}
+async function refresh(){const r=await (await fetch(`/sessions/${sid}/appointments`)).json();const a=$('appts');
+ a.innerHTML=r.appointments.length?'':'None yet';
+ r.appointments.forEach(x=>{const d=document.createElement('div');d.className='appt';
+  d.textContent=Object.entries(x).map(([k,v])=>`${k}: ${v}`).join('\n');d.style.whiteSpace='pre-wrap';a.appendChild(d)})}
+function meta(r){return [(r.tools||[]).length?'tools: '+r.tools.join(', '):'',r.handoff?'<span class="handoff">handed off to staff</span>':''].filter(Boolean).join(' · ')}
+async function sendText(){const t=$('text').value.trim();if(!t)return;$('text').value='';add('me',t);
+ const res=await fetch(`/sessions/${sid}/chat`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({text:t})});
+ if(!res.ok){add('bot','Error: '+res.status);return}const r=await res.json();add('bot',r.reply,meta(r));refresh()}
+$('send').onclick=sendText;$('text').onkeydown=e=>{if(e.key==='Enter')sendText()};$('reset').onclick=start;
+let rec,chunks=[];
+async function down(e){e.preventDefault();if($('mic').disabled||rec)return;
+ try{const s=await navigator.mediaDevices.getUserMedia({audio:true});rec=new MediaRecorder(s);chunks=[];
+ rec.ondataavailable=e=>chunks.push(e.data);rec.onstop=async()=>{s.getTracks().forEach(t=>t.stop());rec=null;$('mic').classList.remove('rec');
+  const blob=new Blob(chunks,{type:chunks[0]?.type||'audio/webm'});if(blob.size<1000)return;
+  $('mic').disabled=true;const res=await fetch(`/sessions/${sid}/voice`,{method:'POST',body:blob});$('mic').disabled=false;
+  if(!res.ok){add('bot','Error: '+res.status+' '+await res.text());return}const r=await res.json();
+  add('me',r.transcript||'(nothing heard)');add('bot',r.reply,meta(r));
+  if(r.audio_base64)new Audio('data:audio/mpeg;base64,'+r.audio_base64).play();refresh()};
+ rec.start();$('mic').classList.add('rec')}catch(err){add('bot','Microphone error: '+err.message)}}
+function up(){if(rec&&rec.state==='recording')rec.stop()}
+$('mic').addEventListener('pointerdown',down);['pointerup','pointerleave'].forEach(ev=>$('mic').addEventListener(ev,up));
+start();
+</script></body></html>
